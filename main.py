@@ -1,7 +1,6 @@
 import os
 import functions
 from tinkoff.invest import Client
-from pprint import pprint
 from tinkoff.invest import (
     RequestError, PortfolioResponse,
     PositionsResponse, PortfolioPosition,
@@ -46,8 +45,14 @@ def main():
 
         # candles = information_parser.get_history_candles_df('BBG000HS77T5')
 
-        # Обновление БД по свечам
-        information_parser.update_candles_table(figi_list=['BBG000HS77T5'], table='candles', connection=connection)
+        # Обновление БД по свечам всех акций
+        shares = pandahouse.read_clickhouse("SELECT figi FROM tinkoff.instruments WHERE instrument_type = 'share'", connection=connection)
+        shares = shares['figi'].to_list()
+
+        # Обновление БД по свечам фьючерсов
+        futures = pandahouse.read_clickhouse("SELECT figi FROM tinkoff.instruments WHERE instrument_type = 'future'", connection=connection)
+        futures = futures['figi'].to_list()
+        information_parser.update_candles_table(figi_list=futures, table='candles', connection=connection)
 
         # print(candles.tail())
         # # Выгрузка всей информации по акциям
@@ -66,8 +71,6 @@ def main():
         #
         # # обновление БД по инструментам
         # information_parser.update_instruments_table(connection=connection)
-
-        print(1)
 
 
 if __name__ == "__main__":

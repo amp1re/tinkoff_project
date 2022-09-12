@@ -13,6 +13,7 @@ from tinkoff.invest.utils import now
 from tinkoff.invest.schemas import InstrumentStatus
 import pandas as pd
 from pandas import DataFrame
+from tqdm.auto import tqdm
 
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
@@ -182,15 +183,17 @@ class InformationParser(PorfolioManager):
             'close': self.cast_money(c.close),
             'high': self.cast_money(c.high),
             'low': self.cast_money(c.low),
-        } for c in self.client.get_all_candles(
+        } for c in tqdm(self.client.get_all_candles(
             figi=figi,
             from_=now() - timedelta(days=365),
             interval=interval,
-        )])
-        df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
-        df['map'] = df['figi'].astype('str') + df['time'].astype('str')
+        ))])
+        if not df.empty:
 
-        return df
+            df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
+            df['map'] = df['figi'].astype('str') + df['time'].astype('str')
+
+            return df
 
     def get_shares_df(self) -> Optional[DataFrame]:
         """
@@ -458,14 +461,18 @@ class InformationParser(PorfolioManager):
         :param connection: connection pandahouse
         :return: обновляет бд
         """
-        for figi in figi_list:
+        for figi in tqdm(figi_list):
             try:
                 q = f"SELECT map from {connection['database']}.{table} WHERE figi='{figi}'"
                 map_exists = pandahouse.read_clickhouse(q, connection=connection)['map'].to_list()
                 figi_df = self.get_history_candles_df(figi)
-                figi_df = figi_df[~figi_df['map'].isin(map_exists)]
-                pandahouse.to_clickhouse(figi_df, table, connection=connection, index=False)
-                print(f'У {figi} добавлено {figi_df.shape[0]} свечей')
+                if figi_df is not None:
+                    figi_df = figi_df[~figi_df['map'].isin(map_exists)]
+                    pandahouse.to_clickhouse(figi_df, table, connection=connection, index=False)
+                    print(f'У {figi} добавлено {figi_df.shape[0]} свечей')
+                else:
+                    print(f'По {figi} свечей нет')
+                    continue
             except RequestError as err:
                 tracking_id = err.metadata.tracking_id if err.metadata else ""
                 logger.error("Error tracking_id=%s code=%s", tracking_id, str(err.code))
