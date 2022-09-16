@@ -52,7 +52,10 @@ def main():
         # Обновление БД по свечам фьючерсов
         futures = pandahouse.read_clickhouse("SELECT figi FROM tinkoff.instruments WHERE instrument_type = 'future'", connection=connection)
         futures = futures['figi'].to_list()
-        information_parser.update_candles_table(figi_list=futures, table='candles', connection=connection)
+        # information_parser.update_candles_table(figi_list=futures, table='candles', connection=connection)
+        print(1)
+        df = information_parser.get_history_candles_df('BBG00S76JLH2')
+
 
         # print(candles.tail())
         # # Выгрузка всей информации по акциям

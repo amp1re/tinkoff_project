@@ -174,26 +174,28 @@ class PorfolioManager:
 
 class InformationParser(PorfolioManager):
 
-    def get_history_candles_df(self, figi, interval=CandleInterval.CANDLE_INTERVAL_1_MIN):
-        df = DataFrame([{
-            'figi': figi,
-            'time': c.time,
-            'volume': c.volume,
-            'open': self.cast_money(c.open),
-            'close': self.cast_money(c.close),
-            'high': self.cast_money(c.high),
-            'low': self.cast_money(c.low),
-        } for c in tqdm(self.client.get_all_candles(
-            figi=figi,
-            from_=now() - timedelta(days=365),
-            interval=interval,
-        ))])
-        if not df.empty:
-
-            df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
-            df['map'] = df['figi'].astype('str') + df['time'].astype('str')
-
-            return df
+    def get_history_candles_df(self, figi: object, delta=365, interval=CandleInterval.CANDLE_INTERVAL_1_MIN):
+        for c in self.client.get_all_candles(figi=figi, from_=now() - timedelta(days=delta), interval=interval):
+            print(c)
+        # df = DataFrame([{
+        #     'figi': figi,
+        #     'time': c.time,
+        #     'volume': c.volume,
+        #     'open': self.cast_money(c.open),
+        #     'close': self.cast_money(c.close),
+        #     'high': self.cast_money(c.high),
+        #     'low': self.cast_money(c.low),
+        # } for c in tqdm(self.client.get_all_candles(
+        #     figi=figi,
+        #     from_=now() - timedelta(days=365),
+        #     interval=interval,
+        # ))])
+        # if not df.empty:
+        #
+        #     df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
+        #     df['map'] = df['figi'].astype('str') + df['time'].astype('str')
+        #
+        #     return df
 
     def get_shares_df(self) -> Optional[DataFrame]:
         """
@@ -445,25 +447,31 @@ class InformationParser(PorfolioManager):
         return concat_df
 
     def update_instruments_table(self, connection):
-        q = f'''SELECT figi from {connection["database"]}.{connection["table"]}'''
-        figi_exists = pandahouse.read_clickhouse(q, connection=connection)['figi'].to_list()
-        concat_df = self.total_instruments_df()
-        concat_df = concat_df[~concat_df['figi'].isin(figi_exists)]
-        pandahouse.to_clickhouse(concat_df, connection['table'], connection=connection, index=False)
-        print(f'Добавлено {concat_df.shape[0]} значений')
-        print(concat_df)
+        try:
+            q = f'''SELECT figi from {connection["database"]}.{connection["table"]}'''
+            figi_exists = pandahouse.read_clickhouse(q, connection=connection)['figi'].to_list()
+            concat_df = self.total_instruments_df()
+            concat_df = concat_df[~concat_df['figi'].isin(figi_exists)]
+            pandahouse.to_clickhouse(concat_df, connection['table'], connection=connection, index=False)
+            print(f'Добавлено {concat_df.shape[0]} значений')
+            print(concat_df)
+        except RequestError as err:
+            tracking_id = err.metadata.tracking_id if err.metadata else ""
+            logger.error("Error tracking_id=%s code=%s", tracking_id, str(err.code))
+
 
     def update_candles_table(self, figi_list, table, connection):
         """
-
         :param figi_list: список figi свечи, которых нужно достать
         :param table: таблица для обновления
         :param connection: connection pandahouse
         :return: обновляет бд
         """
-        for figi in tqdm(figi_list):
+        for figi in figi_list:
+            q = f"SELECT map from {connection['database']}.{table} WHERE figi='{figi}'"
+
             try:
-                q = f"SELECT map from {connection['database']}.{table} WHERE figi='{figi}'"
+
                 map_exists = pandahouse.read_clickhouse(q, connection=connection)['map'].to_list()
                 figi_df = self.get_history_candles_df(figi)
                 if figi_df is not None:
@@ -476,3 +484,9 @@ class InformationParser(PorfolioManager):
             except RequestError as err:
                 tracking_id = err.metadata.tracking_id if err.metadata else ""
                 logger.error("Error tracking_id=%s code=%s", tracking_id, str(err.code))
+
+# CI/CD gitlab
+# volume
+# виртуалка
+# API > Client > БД
+# БД > Сигнал > Песочница

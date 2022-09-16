@@ -154,3 +154,6 @@ dmypy.json
 cython_debug/
 
 .DS_Store
+/db_logs/
+/db_data/
+research.ipynb
