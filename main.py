@@ -6,11 +6,13 @@ from tinkoff.invest import (
     PositionsResponse, PortfolioPosition,
     AccessLevel, Operation, CandleInterval, )
 import pandahouse
+from datetime import timezone, datetime, timezone
+
 
 READ_TOKEN = os.environ.get('READ_TOKEN')
 
 connection = {
-    'host': 'http://localhost:18123',
+    'host': 'http://localhost:8123',
     'database': 'tinkoff',
     'table': 'instruments',
 }
@@ -53,9 +55,10 @@ def main():
         futures = pandahouse.read_clickhouse("SELECT figi FROM tinkoff.instruments WHERE instrument_type = 'future'", connection=connection)
         futures = futures['figi'].to_list()
         # information_parser.update_candles_table(figi_list=futures, table='candles', connection=connection)
-        print(1)
-        df = information_parser.get_history_candles_df('BBG00S76JLH2')
 
+        figi = ['BBG000BB07P9', 'BBG000B9XRY4']
+        information_parser.update_candles_table(figi_list=futures, table='candles', connection=connection)
+        # information_parser.get_history_candles_df('BBG000BB07P9')
 
         # print(candles.tail())
         # # Выгрузка всей информации по акциям

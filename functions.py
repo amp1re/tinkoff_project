@@ -1,6 +1,10 @@
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import logging
+import warnings
+
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import pandahouse
 from tinkoff.invest import (
@@ -9,17 +13,22 @@ from tinkoff.invest import (
     AccessLevel, Operation, CandleInterval,
     SharesResponse, EtfsResponse, FuturesResponse, OperationsResponse, BondsResponse)
 from tinkoff.invest.services import Services
+from tinkoff.invest.services import MarketDataCache
+from tinkoff.invest.caching.market_data_cache.cache_settings import (
+    MarketDataCacheSettings,
+)
 from tinkoff.invest.utils import now
 from tinkoff.invest.schemas import InstrumentStatus
 import pandas as pd
 from pandas import DataFrame
-from tqdm.auto import tqdm
+from time import sleep
+from tqdm import tqdm
 
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
-logging.basicConfig(format="%(asctime)s %(levelname)s:%(message)s", level=logging.INFO)
+# logging.basicConfig(format="%(asctime)s %(levelname)s:%(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +38,8 @@ class PorfolioManager:
         self.client = client
         self.accounts = []
         self.comission = 0.0025  # TODO: прописать парсинг коммиссии
+        self.settings = MarketDataCacheSettings(base_cache_dir=Path("market_data_cache"))
+        self.market_data_cache = MarketDataCache(settings=self.settings, services=client)
 
     def cast_money(self, v, to_rub=True):
         """
@@ -174,28 +185,41 @@ class PorfolioManager:
 
 class InformationParser(PorfolioManager):
 
-    def get_history_candles_df(self, figi: object, delta=365, interval=CandleInterval.CANDLE_INTERVAL_1_MIN):
-        for c in self.client.get_all_candles(figi=figi, from_=now() - timedelta(days=delta), interval=interval):
-            print(c)
-        # df = DataFrame([{
-        #     'figi': figi,
-        #     'time': c.time,
-        #     'volume': c.volume,
-        #     'open': self.cast_money(c.open),
-        #     'close': self.cast_money(c.close),
-        #     'high': self.cast_money(c.high),
-        #     'low': self.cast_money(c.low),
-        # } for c in tqdm(self.client.get_all_candles(
-        #     figi=figi,
-        #     from_=now() - timedelta(days=365),
-        #     interval=interval,
-        # ))])
-        # if not df.empty:
-        #
-        #     df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
-        #     df['map'] = df['figi'].astype('str') + df['time'].astype('str')
-        #
-        #     return df
+    def get_history_candles_df(self, figi: object, delta=now() - timedelta(days=365),
+                               interval=CandleInterval.CANDLE_INTERVAL_1_MIN):
+        all_df = pd.DataFrame(columns=['figi', 'time', 'volume', 'open', 'close', 'high', 'low'])
+        candles_generator = self.client.get_all_candles(
+            figi=figi,
+            from_=delta,
+            interval=interval,
+        )
+        running = True
+        print('Загружаем свечи: ', figi)
+        for c in tqdm(candles_generator):
+            while running:
+                try:
+                    candle = DataFrame([{
+                        'figi': figi,
+                        'time': c.time,
+                        'volume': c.volume,
+                        'open': self.cast_money(c.open),
+                        'close': self.cast_money(c.close),
+                        'high': self.cast_money(c.high),
+                        'low': self.cast_money(c.low),
+                    }])
+                    if not candle.empty:
+                        candle['time'] = pd.to_datetime(candle['time']).dt.tz_localize(None)
+
+                except RequestError as err:
+                    print(err.code)
+                    sleep(10)
+
+                running = False
+            all_df = all_df.append(candle, ignore_index=True)
+            running = True
+
+        print('Свечи загружены')
+        return all_df
 
     def get_shares_df(self) -> Optional[DataFrame]:
         """
@@ -459,7 +483,6 @@ class InformationParser(PorfolioManager):
             tracking_id = err.metadata.tracking_id if err.metadata else ""
             logger.error("Error tracking_id=%s code=%s", tracking_id, str(err.code))
 
-
     def update_candles_table(self, figi_list, table, connection):
         """
         :param figi_list: список figi свечи, которых нужно достать
@@ -467,26 +490,26 @@ class InformationParser(PorfolioManager):
         :param connection: connection pandahouse
         :return: обновляет бд
         """
+        print('Начинаю собирать данные...')
+        print(f'Необходимо собрать данные по {len(figi_list)} инструментам')
+        print()
         for figi in figi_list:
-            q = f"SELECT map from {connection['database']}.{table} WHERE figi='{figi}'"
-
             try:
+                q = f"SELECT max(time) t from {connection['database']}.{table} WHERE figi='{figi}'"
+                max_figi_candle = pandahouse.read_clickhouse(q, connection=connection)['t'].to_list()[0]
+                max_figi_candle = datetime(year=max_figi_candle.year, month=max_figi_candle.month,
+                                           day=max_figi_candle.day, hour=max_figi_candle.hour,
+                                           minute=max_figi_candle.minute+1).replace(tzinfo=timezone.utc)
 
-                map_exists = pandahouse.read_clickhouse(q, connection=connection)['map'].to_list()
-                figi_df = self.get_history_candles_df(figi)
+                if max_figi_candle < now() - timedelta(days=365):
+                    max_figi_candle = now() - timedelta(days=365)
+                figi_df = self.get_history_candles_df(figi, delta=max_figi_candle)
                 if figi_df is not None:
-                    figi_df = figi_df[~figi_df['map'].isin(map_exists)]
                     pandahouse.to_clickhouse(figi_df, table, connection=connection, index=False)
-                    print(f'У {figi} добавлено {figi_df.shape[0]} свечей')
-                else:
-                    print(f'По {figi} свечей нет')
-                    continue
+                    print(f'У {figi} добавлено новых {figi_df.shape[0]} свечей')
             except RequestError as err:
-                tracking_id = err.metadata.tracking_id if err.metadata else ""
-                logger.error("Error tracking_id=%s code=%s", tracking_id, str(err.code))
-
-# CI/CD gitlab
-# volume
-# виртуалка
-# API > Client > БД
-# БД > Сигнал > Песочница
+                print(err.code)
+                sleep(10)
+        print('Все данные собраны')
+                # tracking_id = err.metadata.tracking_id if err.metadata else ""
+                # logger.error("Error tracking_id=%s code=%s", tracking_id, str(err.code))

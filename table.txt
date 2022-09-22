@@ -65,9 +65,8 @@ CREATE TABLE IF NOT EXISTS tinkoff.instruments
 
 ) ENGINE = MergeTree() ORDER BY figi PARTITION BY instrument_type;
 
-CREATE TABLE IF NOT EXISTS tinkoff.instruments
+CREATE TABLE IF NOT EXISTS tinkoff.candles
 (
-    map String,
     figi String,
     time Datetime,
     volume Int64,
